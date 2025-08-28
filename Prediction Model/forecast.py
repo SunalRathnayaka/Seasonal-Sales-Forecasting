@@ -21,6 +21,7 @@ class SalesForecaster:
         self.processed_data = None
         self.feature_cols = []
         self.scaler = StandardScaler()
+        self.business_id = None  # Added to store business_id
         
         # Create output directory if it doesn't exist
         if not os.path.exists(output_dir):
@@ -44,6 +45,12 @@ class SalesForecaster:
                     self.data = pd.DataFrame([raw_data])
             
             print(f"Data loaded successfully with {len(self.data)} records")
+            
+            # Extract business_id if present
+            if 'business_id' in self.data.columns:
+                # Assuming all records have the same business_id
+                self.business_id = self.data['business_id'].iloc[0]
+                print(f"Business ID: {self.business_id}")
             
             # Debug: show data sample
             print("Sample data:")
@@ -183,7 +190,7 @@ class SalesForecaster:
         self.feature_data = df
         
         # Define feature columns (exclude date and target)
-        self.feature_cols = [col for col in df.columns if col not in ['date', 'sales']]
+        self.feature_cols = [col for col in df.columns if col not in ['date', 'sales', 'business_id']]
         
         print(f"Feature engineering complete. Data shape: {df.shape}")
         print(f"Created {len(self.feature_cols)} features: {self.feature_cols}")
@@ -447,6 +454,10 @@ class SalesForecaster:
             'yhat_upper': 'upper_bound'
         }, inplace=True)
         
+        # Add business_id to the output if available
+        if self.business_id is not None:
+            output_df['business_id'] = self.business_id
+        
         # Convert date to string for JSON
         output_df['date'] = output_df['date'].dt.strftime('%Y-%m-%d')
         
@@ -485,7 +496,13 @@ class SalesForecaster:
         # Add labels and title
         ax.set_xlabel('Date')
         ax.set_ylabel('Sales')
-        ax.set_title('Weekly Sales Forecast with XGBoost')
+        
+        # Add business_id to title if available
+        if self.business_id:
+            ax.set_title(f'Weekly Sales Forecast with XGBoost - {self.business_id}')
+        else:
+            ax.set_title('Weekly Sales Forecast with XGBoost')
+            
         ax.legend()
         ax.grid(True)
         
@@ -534,4 +551,4 @@ class SalesForecaster:
 # Example usage
 if __name__ == "__main__":
     forecaster = SalesForecaster('weekly_sales_data.json')
-    forecaster.run_complete_pipeline(weeks=52)
+    forecaster.run_complete_pipeline(weeks=26)
