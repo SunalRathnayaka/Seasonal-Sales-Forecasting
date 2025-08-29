@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
-import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Star, LogOut, Calendar, Clock } from "lucide-react"
+import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, LogOut, Calendar, Clock } from "lucide-react"
 
 interface HistoricalData {
   date: string
@@ -24,8 +24,8 @@ interface ForecastData {
 
 interface ChartData {
   date: string
-  historical?: number
-  forecast?: number
+  sales?: number
+  predicted_sales?: number
 }
 
 export default function DashboardPage() {
@@ -67,14 +67,13 @@ export default function DashboardPage() {
       setHistoricalData(historical)
       setForecastData(forecast)
 
-      // Combine data for chart
       const combinedData: ChartData[] = []
 
       // Add historical data
       historical.forEach((item) => {
         combinedData.push({
           date: item.date,
-          historical: item.sales,
+          sales: item.sales,
         })
       })
 
@@ -82,17 +81,49 @@ export default function DashboardPage() {
       forecast.forEach((item) => {
         const existingIndex = combinedData.findIndex((d) => d.date === item.date)
         if (existingIndex >= 0) {
-          combinedData[existingIndex].forecast = item.predicted_sales
+          combinedData[existingIndex].predicted_sales = item.predicted_sales
         } else {
           combinedData.push({
             date: item.date,
-            forecast: item.predicted_sales,
+            predicted_sales: item.predicted_sales,
           })
         }
       })
 
       // Sort by date
       combinedData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+
+      const lastHistoricalIndex = combinedData.findLastIndex((item) => item.sales !== undefined)
+      const firstForecastIndex = combinedData.findIndex((item) => item.predicted_sales !== undefined)
+
+      if (lastHistoricalIndex >= 0 && firstForecastIndex >= 0 && firstForecastIndex > lastHistoricalIndex + 1) {
+        // There's a gap - insert a connecting point
+        const lastHistoricalPoint = combinedData[lastHistoricalIndex]
+        const firstForecastPoint = combinedData[firstForecastIndex]
+
+        // Create a connecting point at the last historical date with both values
+        if (lastHistoricalPoint && firstForecastPoint) {
+          lastHistoricalPoint.predicted_sales = lastHistoricalPoint.sales
+        }
+      } else if (
+        lastHistoricalIndex >= 0 &&
+        firstForecastIndex >= 0 &&
+        firstForecastIndex === lastHistoricalIndex + 1
+      ) {
+        // Adjacent points - add connecting value to the last historical point
+        const lastHistoricalPoint = combinedData[lastHistoricalIndex]
+        if (lastHistoricalPoint) {
+          lastHistoricalPoint.predicted_sales = lastHistoricalPoint.sales
+        }
+      } else if (lastHistoricalIndex >= 0 && firstForecastIndex >= 0 && firstForecastIndex <= lastHistoricalIndex) {
+        // Overlapping data - ensure smooth transition at the overlap point
+        for (let i = firstForecastIndex; i <= lastHistoricalIndex; i++) {
+          if (combinedData[i].sales !== undefined) {
+            combinedData[i].predicted_sales = combinedData[i].sales
+          }
+        }
+      }
+
       setChartData(combinedData)
     } catch (err) {
       setError("Failed to load dashboard data. Please check your connection.")
@@ -138,7 +169,7 @@ export default function DashboardPage() {
                 <DollarSign className="w-5 h-5 text-orange-600" />
               </div>
               <div>
-                <h1 className="text-xl font-semibold text-gray-900">Restaurant Analytics</h1>
+                <h1 className="text-xl font-semibold text-gray-900">Analytics</h1>
                 <p className="text-sm text-gray-500">Business ID: {businessId}</p>
               </div>
             </div>
@@ -203,7 +234,7 @@ export default function DashboardPage() {
           </Card>
 
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader>
               <CardTitle className="text-sm font-medium">Forecasted Sales</CardTitle>
               <Calendar className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
@@ -225,38 +256,69 @@ export default function DashboardPage() {
             <CardContent>
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
+                  <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="1 1" stroke="#f1f5f9" strokeOpacity={0.5} />
                     <XAxis
                       dataKey="date"
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => new Date(value).toLocaleDateString()}
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      tickLine={{ stroke: "#e2e8f0" }}
+                      axisLine={{ stroke: "#e2e8f0" }}
+                      interval="preserveStartEnd"
+                      tickFormatter={(value) => {
+                        const date = new Date(value)
+                        return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                      }}
+                      minTickGap={30}
                     />
-                    <YAxis tick={{ fontSize: 12 }} />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: "#64748b" }}
+                      tickLine={{ stroke: "#e2e8f0" }}
+                      axisLine={{ stroke: "#e2e8f0" }}
+                      tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                    />
                     <Tooltip
-                      labelFormatter={(value) => new Date(value).toLocaleDateString()}
+                      contentStyle={{
+                        backgroundColor: "white",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: "8px",
+                        boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+                        fontSize: "12px",
+                      }}
+                      labelStyle={{ color: "#374151", fontWeight: "600" }}
+                      labelFormatter={(value) =>
+                        new Date(value).toLocaleDateString("en-US", {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })
+                      }
                       formatter={(value: number, name: string) => [
                         `$${value?.toLocaleString()}`,
-                        name === "historical" ? "Historical Sales" : "Forecasted Sales",
+                        name === "sales" ? "Historical Sales" : name === "predicted_sales" ? "Forecasted Sales" : name,
                       ]}
                     />
-                    <Legend />
+                    <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "20px" }} iconType="line" />
                     <Line
                       type="monotone"
-                      dataKey="historical"
+                      dataKey="sales"
                       stroke="#ea580c"
-                      strokeWidth={2}
+                      strokeWidth={2.5}
                       name="Historical Sales"
                       connectNulls={false}
+                      dot={false}
+                      activeDot={{ r: 5, stroke: "#ea580c", strokeWidth: 2, fill: "white" }}
                     />
                     <Line
                       type="monotone"
-                      dataKey="forecast"
+                      dataKey="predicted_sales"
                       stroke="#3b82f6"
-                      strokeWidth={2}
+                      strokeWidth={2.5}
                       strokeDasharray="5 5"
                       name="Forecasted Sales"
                       connectNulls={false}
+                      dot={false}
+                      activeDot={{ r: 5, stroke: "#3b82f6", strokeWidth: 2, fill: "white" }}
                     />
                   </LineChart>
                 </ResponsiveContainer>
@@ -264,51 +326,13 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Top Selling Items */}
+          {/* Trend Overview */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Star className="w-5 h-5" />
-                <span>Top Selling Items</span>
-              </CardTitle>
+              <CardTitle>Trend Overview</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium">Margherita Pizza</p>
-                  <p className="text-sm text-muted-foreground">23 orders</p>
-                </div>
-                <Badge variant="secondary" className="bg-green-100 text-green-800">
-                  +15%
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium">Caesar Salad</p>
-                  <p className="text-sm text-muted-foreground">18 orders</p>
-                </div>
-                <Badge variant="secondary" className="bg-green-100 text-green-800">
-                  +8%
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium">Chicken Alfredo</p>
-                  <p className="text-sm text-muted-foreground">15 orders</p>
-                </div>
-                <Badge variant="secondary" className="bg-red-100 text-red-800">
-                  -3%
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium">Tiramisu</p>
-                  <p className="text-sm text-muted-foreground">12 orders</p>
-                </div>
-                <Badge variant="secondary" className="bg-green-100 text-green-800">
-                  +22%
-                </Badge>
-              </div>
+            <CardContent className="flex items-center justify-center py-12">
+              <CardDescription className="text-center">Coming Soon</CardDescription>
             </CardContent>
           </Card>
         </div>
@@ -409,7 +433,7 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between">
                 <span className="text-sm">Customer Rating</span>
                 <div className="flex items-center space-x-1">
-                  <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                  <span className="w-4 h-4 rounded-full bg-yellow-400 inline-block" />
                   <span className="text-sm font-medium">4.8</span>
                 </div>
               </div>
