@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import type React from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -37,6 +38,90 @@ export default function DashboardPage() {
   const [error, setError] = useState<string>("")
   const router = useRouter()
 
+  // Overview states
+  const [overview, setOverview] = useState<string>("")
+  const [isOverviewLoading, setIsOverviewLoading] = useState<boolean>(false)
+  const [overviewError, setOverviewError] = useState<string>("")
+
+  // Escape HTML to prevent injection
+  const escapeHtml = (unsafe: string) =>
+    unsafe
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;")
+
+  // Minimal inline markdown: **bold**, *italic*, __bold__, _italic_
+  const formatInlineMarkdown = (text: string) => {
+    const escaped = escapeHtml(text)
+    const withBold = escaped.replace(/(\*\*|__)(.+?)\1/g, "<strong>$2</strong>")
+    const withItalics = withBold.replace(/(?<!<strong>)(\*|_)(.+?)\1(?!<\/strong>)/g, "<em>$2</em>")
+    return withItalics
+  }
+
+  // Nicely format the AI overview: paragraphs + bullet lists
+  const renderOverview = (text: string) => {
+    const lines = text.split(/\r?\n/)
+
+    const elements: React.ReactNode[] = []
+    let paragraphBuffer: string[] = []
+    let bullets: string[] = []
+    let keyCounter = 0
+
+    const flushParagraph = () => {
+      if (paragraphBuffer.length) {
+        const html = formatInlineMarkdown(paragraphBuffer.join(" "))
+        elements.push(
+          <p key={`p-${keyCounter++}`} className="text-gray-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
+        )
+        paragraphBuffer = []
+      }
+    }
+
+    const flushBullets = () => {
+      if (bullets.length) {
+        elements.push(
+          <ul key={`ul-${keyCounter++}`} className="list-disc pl-5 space-y-1 text-gray-700">
+            {bullets.map((b, i) => {
+              const html = formatInlineMarkdown(b)
+              return <li key={`li-${keyCounter}-${i}`} dangerouslySetInnerHTML={{ __html: html }} />
+            })}
+          </ul>
+        )
+        bullets = []
+      }
+    }
+
+    lines.forEach((raw) => {
+      const line = raw.trim()
+      if (!line) {
+        // blank line separates blocks
+        flushBullets()
+        flushParagraph()
+        return
+      }
+
+      // bullet formats: -, *, •, or numbered like "1. "
+      if (/^[-*•]\s+/.test(line)) {
+        flushParagraph()
+        bullets.push(line.replace(/^[-*•]\s+/, ""))
+      } else if (/^\d+\.\s+/.test(line)) {
+        flushParagraph()
+        bullets.push(line.replace(/^\d+\.\s+/, ""))
+      } else {
+        flushBullets()
+        paragraphBuffer.push(line)
+      }
+    })
+
+    // flush any remaining content
+    flushBullets()
+    flushParagraph()
+
+    return <div className="space-y-2">{elements}</div>
+  }
+
   useEffect(() => {
     const storedBusinessId = localStorage.getItem("business_id")
     if (!storedBusinessId) {
@@ -45,6 +130,7 @@ export default function DashboardPage() {
     }
     setBusinessId(storedBusinessId)
     fetchData(storedBusinessId)
+    fetchOverview(storedBusinessId)
   }, [router])
 
   const fetchData = async (id: string) => {
@@ -130,6 +216,26 @@ export default function DashboardPage() {
       console.error("Error fetching data:", err)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  // Fetch overview from backend (does not block the main dashboard)
+  const fetchOverview = async (id: string) => {
+    setIsOverviewLoading(true)
+    setOverviewError("")
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/sales/${id}/overview`)
+      if (!res.ok) {
+        throw new Error("Failed to fetch overview")
+      }
+      const data: { business_id: string; overview: string } = await res.json()
+      setOverview(data.overview)
+    } catch (e) {
+      setOverview("")
+      setOverviewError("Unable to load AI overview.")
+      console.error("Error fetching overview:", e)
+    } finally {
+      setIsOverviewLoading(false)
     }
   }
 
@@ -331,8 +437,16 @@ export default function DashboardPage() {
             <CardHeader>
               <CardTitle>Trend Overview</CardTitle>
             </CardHeader>
-            <CardContent className="flex items-center justify-center py-12">
-              <CardDescription className="text-center">Coming Soon</CardDescription>
+            <CardContent className="py-4">
+              {isOverviewLoading ? (
+                <CardDescription className="text-center">Analyzing trends...</CardDescription>
+              ) : overviewError ? (
+                <CardDescription className="text-center">{overviewError}</CardDescription>
+              ) : overview ? (
+                <div className="text-sm">{renderOverview(overview)}</div>
+              ) : (
+                <CardDescription className="text-center">No overview available</CardDescription>
+              )}
             </CardContent>
           </Card>
         </div>

@@ -9,8 +9,15 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Add OpenAI client import
+try:
+	from openai import OpenAI
+except Exception:
+	OpenAI = None
+
+# Load environment variables (.env next to this file), fallback to process env
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, ".env"), override=False)
 
 app = FastAPI(
     title="Sales Forecasting API",
@@ -265,6 +272,115 @@ async def get_sales_data(business_id: str):
             status_code=500,
             detail=f"Database error: {str(e)}"
         )
+    finally:
+        conn.close()
+
+@app.get("/api/sales/{business_id}/overview")
+async def get_sales_overview(business_id: str):
+    """Generate a trend overview for a business by sending input and forecast data to OpenAI."""
+    # Check OpenAI availability and config
+    if OpenAI is None:
+        raise HTTPException(status_code=500, detail="OpenAI SDK is not installed on the server")
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    if not openai_api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY environment variable is missing")
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            # Fetch input sales
+            cur.execute(
+                """
+                SELECT date, sales
+                FROM input_sales
+                WHERE business_id = %s
+                ORDER BY date
+                """,
+                (business_id,),
+            )
+            input_rows = cur.fetchall()
+
+            # Fetch forecast sales
+            cur.execute(
+                """
+                SELECT date, predicted_sales, lower_bound, upper_bound
+                FROM forecast_sales
+                WHERE business_id = %s
+                ORDER BY date
+                """,
+                (business_id,),
+            )
+            forecast_rows = cur.fetchall()
+
+            if not input_rows and not forecast_rows:
+                raise HTTPException(status_code=404, detail=f"No sales data found for business_id: {business_id}")
+
+        # Prepare compact data payloads (limit to keep prompt size small)
+        def serialize_input(rows, limit=150):
+            items = []
+            for row in rows[-limit:]:
+                items.append({
+                    "date": row["date"].isoformat() if hasattr(row["date"], "isoformat") else str(row["date"]),
+                    "sales": float(row["sales"]),
+                })
+            return items
+
+        def serialize_forecast(rows, limit=150):
+            items = []
+            for row in rows[-limit:]:
+                items.append({
+                    "date": row["date"].isoformat() if hasattr(row["date"], "isoformat") else str(row["date"]),
+                    "predicted_sales": float(row["predicted_sales"]),
+                    "lower_bound": float(row["lower_bound"]),
+                    "upper_bound": float(row["upper_bound"]),
+                })
+            return items
+
+        input_payload = serialize_input(input_rows)
+        forecast_payload = serialize_forecast(forecast_rows)
+
+        # Build prompt/messages
+        system_msg = (
+            "You are a data analyst. Analyze historical weekly sales and forecast data. "
+            "Identify key trends, seasonality, growth/decline, anomalies, and forecast outlook. "
+            "Be concise and actionable. Use plain language. Include 3 bullets and a 1-sentence summary."
+        )
+        user_msg = {
+            "business_id": business_id,
+            "input_sales_sample_count": len(input_payload),
+            "forecast_sample_count": len(forecast_payload),
+            "input_sales": input_payload,
+            "forecast_sales": forecast_payload,
+        }
+
+        client = OpenAI(api_key=openai_api_key)
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": json.dumps(user_msg)},
+                ],
+                temperature=0.2,
+                max_tokens=500,
+            )
+            overview_text = completion.choices[0].message.content if completion and completion.choices else None
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"OpenAI request failed: {str(e)}")
+
+        if not overview_text:
+            raise HTTPException(status_code=502, detail="OpenAI did not return a response")
+
+        return {
+            "business_id": business_id,
+            "overview": overview_text,
+            "input_records_used": len(input_payload),
+            "forecast_records_used": len(forecast_payload),
+            "model": model,
+        }
+    except psycopg2.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     finally:
         conn.close()
 
